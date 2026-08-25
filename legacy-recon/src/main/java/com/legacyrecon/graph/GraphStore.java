@@ -150,6 +150,9 @@ public class GraphStore {
                 upsertInsight(i);
                 deleteApproval(projectId, insightId);
             }
+            case create, degrade -> {
+                // create/degrade：只记录审计，不改变状态与治理表
+            }
             default -> {
             }
         }
