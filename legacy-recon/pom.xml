@@ -25,6 +25,25 @@
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
   </properties>
 
+  <dependencyManagement>
+    <dependencies>
+      <!-- 显式锁定 JDT 传递依赖中存在多版本冲突的 Eclipse OSGi 组件，
+           将 Maven "最近优先" 的隐式仲裁变为可复现的显式版本（与 JDT 3.46.0 对齐）：
+           - org.eclipse.osgi: 3.23.200/3.24.0/3.24.100/3.24.200 冲突 -> 3.24.200
+           - org.eclipse.equinox.common: 3.20.200/3.20.300/3.20.400 冲突 -> 3.20.300 -->
+      <dependency>
+        <groupId>org.eclipse.platform</groupId>
+        <artifactId>org.eclipse.osgi</artifactId>
+        <version>3.24.200</version>
+      </dependency>
+      <dependency>
+        <groupId>org.eclipse.platform</groupId>
+        <artifactId>org.eclipse.equinox.common</artifactId>
+        <version>3.20.300</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
   <dependencies>
     <!-- Web / WebSocket / JDBC -->
     <dependency>

@@ -6,7 +6,7 @@ import java.time.Instant;
  * 03.3 审计节点。audit chain 永久保留（回滚 = 状态转移 + 审计记录，不做物理删除）。
  */
 public class AuditRecord {
-    public enum Action { approve, modify, reject, auto_approve, supersede }
+    public enum Action { approve, modify, reject, auto_approve, supersede, create, degrade }
 
     public String id;
     public String projectId;
