@@ -35,6 +35,11 @@ cd /workspace/legacy-recon
 mvn -q package -DskipTests          # 打 fat-jar
 java -jar target/legacy-recon-0.1.0.jar   # 默认 8080，SQLite 落 data/legacy-recon.db
 
+# 环境变量（生产部署）
+#   LEGACY_RECON_PORT  端口（默认 8080）
+#   LEGACY_RECON_BIND  绑定地址（默认 0.0.0.0）
+#   legacy-recon.data-dir  数据目录（默认 ./data，含 SQLite 与滚动日志）
+
 # C++ Clang 子进程协议工具（可选增强）
 cmake -S src/main/cpp/clang-parser -B build-cpp
 cmake --build build-cpp -j4          # 产出 build-cpp/recon_clang_parser
@@ -44,6 +49,29 @@ export RECON_CPP_BINARY=build-cpp/recon_clang_parser   # Java 侧子进程客户
 ```
 
 > 沙箱内 Maven 需代理：已写入 `~/.m2/settings.xml`（`127.0.0.1:18080`）。
+
+### Web 控制台（GUI）
+
+启动后浏览器访问 `http://localhost:8080/`：
+
+- **项目**：导入（Java/C++）、归档、软删除，侧边栏切换
+- **运行**：选择 parse/enrich/generate 阶段 + forceFull 触发管道；WebSocket 实时事件流；运行历史与统计
+- **实体 / 关系**：类型过滤、关键字搜索、分页浏览
+- **洞察**：按状态筛选，一键通过/驳回（R21 缓存随之失效）
+- **文档**：四种文档类型生成，Markdown 内联渲染 + 校验失败清单
+- **图谱**：类图 / 调用图（前端 SVG 自绘，无外部 CDN 依赖）
+- **LLM 配置**：baseUrl / model / apiKey / 预算 / 限流 / 熔断参数
+
+### 生产监控（Actuator）
+
+```bash
+curl localhost:8080/actuator/health     # 存活/就绪探测（liveness/readiness 探针组）
+curl localhost:8080/actuator/info       # 应用信息
+curl localhost:8080/actuator/metrics    # JVM/HTTP 指标
+```
+
+生产加固：`server.shutdown=graceful`（优雅停机 30s）、Tomcat 连接治理、
+RFC 7807 统一异常（5xx 不泄漏内部细节）、滚动文件日志（`data/logs/`，保留 14 天 / 200MB 封顶）。
 
 ## LLM 增强配置
 
@@ -113,6 +141,8 @@ curl -s "localhost:8080/api/v1/files/$PID:com/example/Account.java/content?start
 - **LLM 客户端（生产级）**：OpenAI 兼容 chat completions 实现 —— 指数退避重试（可配置重试状态码 408/425/429/5xx）、并发信号量限流、连续失败熔断、单日 token 预算（UTC 自然日）、整体/连接/读超时分层控制；多种洞察类型（summary / arch-role / tech-debt / business-rule）结构化 JSON 解析，Prompt 版本化管理；LLM 错误可配置降级（`degradeOnLLMError`）。
 - **生成层**：证据锚点（R5）、RefValidator（R19，失败降级纯文本并附清单）、FreeMarker 模板、调用图完整性声明（R12）。
 - **API**：`04.3` 全部 REST 路由（RFC7807）、`04.4` WebSocket 事件、文件内容预览（R20）。
+- **GUI 控制台**：内嵌静态 SPA（`/`，无构建依赖/CDN）：项目导入与生命周期、管道触发 + WS 实时事件、实体/关系浏览、洞察审核、文档生成渲染、类图/调用图 SVG 自绘、LLM 配置。
+- **生产加固**：Actuator 健康/指标/信息端点、优雅停机、Tomcat 连接治理、统一异常（4xx 可读 detail / 5xx 详情入日志不外泄）、滚动文件日志。
 
 ## 脚手架边界（生产需替换/完善）
 
@@ -128,8 +158,8 @@ curl -s "localhost:8080/api/v1/files/$PID:com/example/Account.java/content?start
 
 ```
 src/main/java/com/legacyrecon/{config,ucm,parser,facts,graph,enrich,generate,pipeline,api,util}
-src/main/cpp/clang-parser/{main.cpp,json.hpp,CMakeLists.txt}   # 性能敏感（C++）子进程
-src/main/resources/{db/schema.sql, db/graph.sql, application.properties}
+src/main/cpp/clang-parser/{main.cpp,json.hpp,CMakeLists.txt,clang-c/}   # 性能敏感（C++）子进程
+src/main/resources/{db/schema.sql, db/graph.sql, static/, application.properties}
 sample-java/com/example/*.java                                  # 样例遗留 Java 工程
 sample-cpp/{include/account.h,src/account.cpp}                  # 样例遗留 C++ 工程（宏/模板/继承覆盖）
 ```

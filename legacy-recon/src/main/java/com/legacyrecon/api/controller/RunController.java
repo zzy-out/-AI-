@@ -32,6 +32,13 @@ public class RunController {
         return pipeline.run(id, r);
     }
 
+    @GetMapping
+    public java.util.List<java.util.Map<String, Object>> list(@PathVariable String id,
+                                                              @RequestParam(defaultValue = "50") int limit) {
+        facts.getProject(id); // 项目不存在时抛 IllegalArgumentException
+        return facts.listRuns(id, limit);
+    }
+
     @GetMapping("/{runId}")
     public Map<String, Object> get(@PathVariable String id, @PathVariable String runId) {
         Map<String, Object> run = facts.getRun(id, runId);

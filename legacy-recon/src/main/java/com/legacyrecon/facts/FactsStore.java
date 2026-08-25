@@ -112,6 +112,21 @@ public class FactsStore {
         return out;
     }
 
+    /** 返回项目运行历史（新 → 旧，limit 条）。 */
+    public List<Map<String, Object>> listRuns(String projectId, int limit) {
+        return jdbc.queryForList(
+                        "SELECT id,trigger,stages,status,stats_json,started_at,finished_at "
+                                + "FROM runs WHERE project_id=? ORDER BY started_at DESC LIMIT " + Math.max(1, Math.min(limit, 200)),
+                        projectId)
+                .stream()
+                .map(row -> {
+                    Map<String, Object> out = new LinkedHashMap<>(row);
+                    out.put("id", row.get("id"));
+                    return out;
+                })
+                .collect(Collectors.toList());
+    }
+
     /** 返回 S_old：文件路径 -> checksum（02.4 增量算法持久状态）。 */
     public Map<String, String> getChecksums(String projectId) {
         Map<String, String> out = new HashMap<>();

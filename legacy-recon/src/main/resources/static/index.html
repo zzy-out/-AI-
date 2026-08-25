@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>legacy-recon · 遗留系统 AI 重构控制台</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%234f7cff'/%3E%3Ctext x='16' y='22' font-size='16' font-family='sans-serif' font-weight='bold' fill='white' text-anchor='middle'%3ELR%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<header id="topbar">
+  <div class="brand">
+    <span class="logo">LR</span>
+    <span class="title">legacy-recon 控制台</span>
+    <span id="server-status" class="status-dot" title="后端健康状态"></span>
+  </div>
+  <div class="top-actions">
+    <button id="btn-config" class="ghost" title="LLM 增强配置">LLM 配置</button>
+    <a class="ghost" href="/actuator/health" target="_blank" rel="noopener">健康检查</a>
+  </div>
+</header>
+
+<div id="layout">
+  <aside id="sidebar">
+    <div class="side-head">
+      <span>项目</span>
+      <button id="btn-new-project" class="mini primary">＋ 导入</button>
+    </div>
+    <ul id="project-list" class="projects"></ul>
+  </aside>
+
+  <main id="main">
+    <div id="project-header" class="hidden">
+      <div>
+        <h1 id="project-name"></h1>
+        <div id="project-meta" class="muted"></div>
+      </div>
+      <div class="header-actions">
+        <button id="btn-run" class="primary">▶ 运行管道</button>
+        <button id="btn-archive" class="ghost">归档</button>
+        <button id="btn-delete" class="danger">删除</button>
+      </div>
+    </div>
+
+    <nav id="tabs" class="hidden">
+      <button data-tab="run" class="tab active">运行</button>
+      <button data-tab="entities" class="tab">实体</button>
+      <button data-tab="relations" class="tab">关系</button>
+      <button data-tab="insights" class="tab">洞察</button>
+      <button data-tab="docs" class="tab">文档</button>
+      <button data-tab="diagram" class="tab">图谱</button>
+    </nav>
+
+    <section id="tab-run" class="tab-body">
+      <div class="panel">
+        <div class="panel-title">触发管道</div>
+        <div class="run-form">
+          <label><input type="checkbox" id="st-parse" checked> parse</label>
+          <label><input type="checkbox" id="st-enrich" checked> enrich</label>
+          <label><input type="checkbox" id="st-generate" checked> generate</label>
+          <label><input type="checkbox" id="st-force"> forceFull</label>
+          <button id="btn-run-go" class="primary">执行</button>
+        </div>
+        <div id="run-result" class="muted"></div>
+        <div class="panel-title">实时事件（WebSocket）</div>
+        <pre id="ws-log" class="log"></pre>
+        <div class="panel-title">运行历史</div>
+        <table id="run-history" class="grid">
+          <thead><tr><th>runId</th><th>trigger</th><th>状态</th><th>实体/关系/问题</th><th>开始时间</th><th>耗时</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="tab-entities" class="tab-body hidden">
+      <div class="panel">
+        <div class="filters">
+          <select id="ent-type">
+            <option value="">全部类型</option>
+            <option>Class</option><option>Interface</option><option>Enum</option>
+            <option>Annotation</option><option>Method</option><option>Constructor</option>
+            <option>Field</option><option>File</option><option>Macro</option>
+            <option>Namespace</option><option>Function</option><option>Struct</option>
+            <option>Union</option><option>EnumConstant</option><option>Variable</option>
+          </select>
+          <input id="ent-q" type="search" placeholder="搜索名称…">
+          <button id="btn-ent-search" class="ghost">查询</button>
+        </div>
+        <table id="entity-table" class="grid">
+          <thead><tr><th>类型</th><th>名称</th><th>全限定名</th><th>位置</th><th>签名</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div id="ent-pager" class="pager"></div>
+      </div>
+    </section>
+
+    <section id="tab-relations" class="tab-body hidden">
+      <div class="panel">
+        <div class="filters">
+          <select id="rel-type">
+            <option value="">全部类型</option>
+            <option>CONTAINS</option><option>INHERITS</option><option>IMPLEMENTS</option>
+            <option>CALLS</option><option>DEPENDS_ON</option><option>REFERENCES</option>
+            <option>OVERRIDES</option><option>INSTANTIATES</option><option>READS</option><option>WRITES</option>
+          </select>
+          <button id="btn-rel-search" class="ghost">查询</button>
+        </div>
+        <table id="relation-table" class="grid">
+          <thead><tr><th>类型</th><th>来源</th><th>目标</th><th>位置</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="tab-insights" class="tab-body hidden">
+      <div class="panel">
+        <div class="filters">
+          <select id="ins-status">
+            <option value="">全部状态</option>
+            <option>pending</option><option>approved</option><option>rejected</option><option>superseded</option>
+          </select>
+          <button id="btn-ins-search" class="ghost">查询</button>
+        </div>
+        <div id="insight-list"></div>
+      </div>
+    </section>
+
+    <section id="tab-docs" class="tab-body hidden">
+      <div class="panel">
+        <div class="panel-title">生成文档</div>
+        <div class="filters">
+          <select id="doc-type">
+            <option value="architecture">架构说明</option>
+            <option value="module">模块说明</option>
+            <option value="api">API 文档</option>
+            <option value="data_dict">数据字典</option>
+          </select>
+          <button id="btn-doc-gen" class="primary">生成</button>
+          <div id="doc-meta" class="muted"></div>
+        </div>
+        <div id="doc-content" class="md"></div>
+      </div>
+    </section>
+
+    <section id="tab-diagram" class="tab-body hidden">
+      <div class="panel">
+        <div class="filters">
+          <select id="diagram-type">
+            <option value="class">类图</option>
+            <option value="call">调用图</option>
+          </select>
+          <button id="btn-diagram" class="primary">渲染</button>
+        </div>
+        <div id="diagram-box"></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- 新建项目对话框 -->
+<dialog id="dlg-new-project">
+  <form method="dialog" id="form-new-project">
+    <h2>导入项目</h2>
+    <label>项目根目录（服务器本地路径）
+      <input name="root" required placeholder="/path/to/project">
+    </label>
+    <label>名称 <input name="name" placeholder="留空取目录名"></label>
+    <label>语言
+      <select name="language">
+        <option value="java">Java</option>
+        <option value="cpp">C++</option>
+      </select>
+    </label>
+    <div class="dlg-actions">
+      <button value="cancel" class="ghost">取消</button>
+      <button id="btn-import-confirm" value="ok" class="primary">导入</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- LLM 配置对话框 -->
+<dialog id="dlg-config">
+  <form method="dialog" id="form-config">
+    <h2>LLM 增强配置</h2>
+    <label><input type="checkbox" name="enabled"> 启用</label>
+    <label>API 地址（OpenAI 兼容）<input name="baseUrl" placeholder="https://api.openai.com/v1"></label>
+    <label>模型 <input name="model" placeholder="gpt-4o-mini"></label>
+    <label>API Key <input name="apiKey" type="password"></label>
+    <label>每日 Token 预算 <input name="dailyTokenBudget" type="number" placeholder="0 = 不限"></label>
+    <label>并发上限 <input name="concurrencyLimit" type="number"></label>
+    <label>重试次数 <input name="retryLimit" type="number"></label>
+    <label>熔断失败阈值 <input name="circuitBreakerFailures" type="number"></label>
+    <div class="dlg-actions">
+      <button value="cancel" class="ghost">取消</button>
+      <button id="btn-config-save" value="ok" class="primary">保存</button>
+    </div>
+  </form>
+</dialog>
+
+<footer id="toast-box"></footer>
+
+<script src="/js/app.js"></script>
+</body>
+</html>
