@@ -43,9 +43,8 @@ public class RefValidator {
                 continue;
             }
             if (ev.location != null && e.location != null) {
-                boolean inRange = ev.location.startLine >= e.location.startLine
-                        && ev.location.startLine < e.location.endLine;
-                if (!inRange) {
+                // R19：位置级包含判断（单行实体 startLine==endLine 时行级判断会误判为空区间）
+                if (!e.location.contains(ev.location.startLine, ev.location.startCol)) {
                     failures.add("证据位置不在实体区间内：" + ev.entityId + " " + ev.location + " vs " + e.location);
                 }
             }

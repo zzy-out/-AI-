@@ -8,7 +8,7 @@
 | 设计文档 | 实现位置 |
 |---|---|
 | 01 统一代码模型（UCM） | `com.legacyrecon.ucm`：`model`（Entity/Relation/TypeRef/SourceLocation/ParseResult）、`id`（DeterministicId、JvmDescriptor 附录 A）、`validator.UcmValidator`（01.8） |
-| 02 解析层 | `com.legacyrecon.parser`：`api`（LanguageParser/ParseRequest/…）、`java.JdtParser`（JDT 绑定模式 + DOM 兜底解析）、`cpp.ClangSubprocessClient`（02.3 子进程协议客户端） |
+| 02 解析层 | `com.legacyrecon.parser`：`api`（LanguageParser/ParseRequest/…）、`java.JdtParser`（JDT 绑定模式 + DOM 兜底解析）、`cpp.ClangSubprocessClient`（02.3 子进程协议客户端 + 跨文件去重） |
 | 03 数据模型 | `com.legacyrecon.facts.FactsStore`（03.2 SQLite）、`graph`（03.3 洞察/审计/治理表+状态机、SQLite 图模式 ADR-004、insight_approvals ADR-009）、`enrich`（03.5 LLM 治理+规则引擎：`LlmClient` 重试/限流/熔断/预算） |
 | 04 生成层与交互 | `com.legacyrecon.generate`（文档模型/证据锚点、RefValidator R19、FreeMarker、ChartMapper）、`pipeline`（阶段缓存 R21/事件）、`api`（REST RFC7807 + WebSocket 04.4） |
 
@@ -39,6 +39,8 @@ java -jar target/legacy-recon-0.1.0.jar   # 默认 8080，SQLite 落 data/legacy
 cmake -S src/main/cpp/clang-parser -B build-cpp
 cmake --build build-cpp -j4          # 产出 build-cpp/recon_clang_parser
 export RECON_CPP_BINARY=build-cpp/recon_clang_parser   # Java 侧子进程客户端会使用
+# 检测到 libclang（libclang-18-dev / libclang.so 运行库）时启用语义级提取；
+# 未检测到则构建协议骨架降级版（仅 File 实体 + CPP.PROTOCOL_SCAFFOLD issue）
 ```
 
 > 沙箱内 Maven 需代理：已写入 `~/.m2/settings.xml`（`127.0.0.1:18080`）。
@@ -83,6 +85,7 @@ PID=$(curl -s -X POST localhost:8080/api/v1/projects \
   -H 'Content-Type: application/json' \
   -d '{"root":"/workspace/legacy-recon/sample-java","name":"银行示例","language":"java"}' \
   | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+# C++ 工程同理：language 换成 "cpp"（root 指向 sample-cpp，需 RECON_CPP_BINARY 指向 libclang 版二进制）
 # parse→enrich→generate 一跑
 curl -s -X POST localhost:8080/api/v1/projects/$PID/runs \
   -H 'Content-Type: application/json' -d '{"stages":["parse","enrich","generate"]}'
@@ -101,6 +104,8 @@ curl -s "localhost:8080/api/v1/files/$PID:com/example/Account.java/content?start
 - **UCM 确定性**：实体/关系 ID（ADR-005/008）、Java JVM 描述符签名（附录 A）、UCM 校验器（01.8）。
 - **JDT 解析**：类/接口/枚举/注解、方法/构造器、字段/参数、CONTAINS/DEPENDS_ON/CALLS/INSTANTIATES/READS/WRITES；语法问题降级为 issue。
 - **JDT 绑定模式**：优先 `setResolveBindings(true)` + `setEnvironment()` 一次性解析全部文件，从 ITypeBinding/IMethodBinding 抽取 **INHERITS / IMPLEMENTS / OVERRIDES** 跨文件关系；绑定失败自动回退 DOM 模式（结构化解析，无跨文件符号决议）。
+- **C++ 语义级提取（libclang，02.3）**：链接 libclang 的子进程实现（`RECON_HAS_LIBCLANG` 编译开关）——Namespace/Class/Struct/Union/Enum/EnumConstant/Method/Constructor/Destructor/Function/Field/Variable/Macro 实体；CONTAINS/INHERITS/CALLS/DEPENDS_ON/REFERENCES 关系；**宏记录（R13）**：Macro 实体（含 `macroBody` 原文）+ 展开点 REFERENCES（spelling location，按位置归属最内层包含实体）；**模板策略（R12）**：`templatePolicy=off|declarations|whitelist|full`（默认 declarations，实例化经 `clang_getSpecializedCursorTemplate` 归一到模板声明避免 ID 漂移）；compile_commands.json 优先，缺省自动 fallback（`-x c++` 处理头文件 + 自动 include 目录 + `-I` 自动发现）；Java 客户端按实体/关系 ID 跨文件去重。未装 libclang 时构建协议骨架降级版（仅 File 实体）。
+- **语言路由**：`PipelineService` 按 `project.configJson.language` 路由到 JdtParser / ClangSubprocessClient；C++ 项目配置项 `cpp.templatePolicy / cpp.recordMacros / cpp.fallbackIncludeDirs / cpp.fallbackDefines / cpp.standard`。
 - **增量解析（02.4）**：差异集 → dirty → 反向传播（DEPENDS_ON）→ 阈值/forceFull 回退；事务性合并（S_old 校验和）。
 - **事实层**：完整 `03.2` SQLite schema + `relations.external_target` 冗余列（R16）。
 - **图谱层**：SQLite 图模式（ADR-004）、洞察/审计状态机（ADR-007）、治理表恢复（ADR-009）、BFS 子图 + 外部虚拟节点（R16）。
@@ -114,7 +119,7 @@ curl -s "localhost:8080/api/v1/files/$PID:com/example/Account.java/content?start
 暂未完整落地、接口/桩或简化实现的部分：
 
 - **JDT**：绑定模式已启用（`setResolveBindings` + `setEnvironment` 全工程绑定，含 INHERITS/IMPLEMENTS/OVERRIDES 跨文件关系）；classpath 获取仍依赖显式配置，泛型擦除签名为近似（如类型参数按 `L<T>;` 编码）。绑定失败自动回退 DOM 模式。
-- **C++** 为**子进程协议骨架**（`CPP.PROTOCOL_SCAFFOLD`）：文件级 File 实体 + 模板跳过 issue（R12），语义级提取需链接 libclang/LibTooling。
+- **C++**：libclang 语义级提取已启用（需安装 libclang，如 `libclang-18-dev`）；已知边界——类模板特化按 ClassDecl 处理、CXXBaseSpecifier 语义父无效（继承关系来源取 visitor 父）、`using`/typedef 别名不做透传解析、预处理记录仅覆盖宏定义与展开点。未装 libclang 时降级为协议骨架（`CPP.PROTOCOL_SCAFFOLD`，仅 File 实体）。
 - **LLM**：客户端为生产级实现（重试/限流/熔断/预算），默认关闭；经 `GET/PUT /api/v1/config` 配置 baseUrl / model / apiKey 后启用。
 - **导出格式** 目前生成 Markdown；HTML/PDF/Word 走 Pandoc 为后续项。
 - 图谱默认 **SQLite 图模式**（ADR-004 MVP 降级）；Neo4j 投影为生产扩展。
@@ -126,4 +131,5 @@ src/main/java/com/legacyrecon/{config,ucm,parser,facts,graph,enrich,generate,pip
 src/main/cpp/clang-parser/{main.cpp,json.hpp,CMakeLists.txt}   # 性能敏感（C++）子进程
 src/main/resources/{db/schema.sql, db/graph.sql, application.properties}
 sample-java/com/example/*.java                                  # 样例遗留 Java 工程
+sample-cpp/{include/account.h,src/account.cpp}                  # 样例遗留 C++ 工程（宏/模板/继承覆盖）
 ```

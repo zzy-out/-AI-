@@ -1,5 +1,6 @@
 package com.legacyrecon.parser.cpp;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.legacyrecon.parser.api.*;
 import com.legacyrecon.ucm.model.*;
 import com.legacyrecon.util.Json;
@@ -7,6 +8,8 @@ import org.springframework.stereotype.Component;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 
@@ -22,7 +25,7 @@ public class ClangSubprocessClient implements LanguageParser {
     private volatile String binaryPath =
             System.getenv("RECON_CPP_BINARY") != null
                     ? System.getenv("RECON_CPP_BINARY")
-                    : "build/recon_clang_parser";
+                    : null; // null = 默认候选路径自动探测（见 resolveBinary）
     private final long perBatchTimeoutMs;
 
     public ClangSubprocessClient() {
@@ -66,20 +69,24 @@ public class ClangSubprocessClient implements LanguageParser {
             filesJson.add(f);
         }
         req.put("files", filesJson);
-        req.put("compileCommands", Collections.emptyList());
+        req.put("compileCommands", loadCompileCommands(request, filesJson, out));
         req.put("mode", "cpp");
-        Map<String, Object> opts = new LinkedHashMap<>();
-        if (request.config != null && request.config.cpp != null) {
-            opts.put("recordMacros", request.config.cpp.recordMacros);
-            opts.put("templatePolicy", request.config.cpp.templatePolicy == null ? "declarations" : request.config.cpp.templatePolicy);
-        } else {
-            opts.put("recordMacros", true);
-            opts.put("templatePolicy", "declarations");
+        if (request.workingDir != null) {
+            req.put("rootDir", request.workingDir.toAbsolutePath().normalize().toString());
         }
+        CppConfig cpp = request.config != null && request.config.cpp != null
+                ? request.config.cpp : new CppConfig();
+        Map<String, Object> opts = new LinkedHashMap<>();
+        opts.put("recordMacros", cpp.recordMacros);
+        opts.put("templatePolicy", cpp.templatePolicy == null ? "declarations" : cpp.templatePolicy);
+        opts.put("fallbackIncludeDirs", cpp.fallbackIncludeDirs);
+        opts.put("fallbackDefines", cpp.fallbackDefines);
+        opts.put("standard", cpp.standard == null ? "c++17" : cpp.standard);
+        opts.put("templateWhitelist", cpp.templateWhitelist);
         req.put("options", opts);
 
         try {
-            Process proc = new ProcessBuilder(binaryPath)
+            Process proc = new ProcessBuilder(resolveBinary())
                     .redirectErrorStream(false)
                     .start();
             try (BufferedWriter w = new BufferedWriter(new OutputStreamWriter(proc.getOutputStream(), StandardCharsets.UTF_8))) {
@@ -112,7 +119,7 @@ public class ClangSubprocessClient implements LanguageParser {
             }
         } catch (IOException e) {
             out.issues.add(ParseIssue.error("CPP.CLIENT_IO",
-                    "子进程启动/IO 失败（binary=" + binaryPath + "）：" + e.getMessage(), null));
+                    "子进程启动/IO 失败（binary=" + resolveBinary() + "）：" + e.getMessage(), null));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             out.issues.add(ParseIssue.error("CPP.INTERRUPTED", "解析被中断", null));
@@ -122,6 +129,63 @@ public class ClangSubprocessClient implements LanguageParser {
         out.addStats("relationCount", out.relations.size());
         out.addStats("issueCount", out.issues.size());
         return out;
+    }
+
+    /** 显式配置 > 环境变量 > 默认候选路径（build-cpp/、build/）。 */
+    private String resolveBinary() {
+        if (binaryPath != null) {
+            return binaryPath;
+        }
+        for (String candidate : new String[]{"build-cpp/recon_clang_parser", "build/recon_clang_parser"}) {
+            if (Files.isRegularFile(Path.of(candidate))) {
+                return candidate;
+            }
+        }
+        return "build/recon_clang_parser";
+    }
+
+    /**
+     * 读取 compile_commands.json（02.3 编译数据库），仅保留匹配本批文件的条目。
+     * 文件缺失/解析失败 → 空列表 + CPP.COMPILE_DB_MISSING WARNING（子进程走 fallback 模式）。
+     */
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> loadCompileCommands(ParseRequest request,
+                                                          List<Map<String, Object>> filesJson,
+                                                          ParseResult out) {
+        CppConfig cpp = request.config != null && request.config.cpp != null ? request.config.cpp : null;
+        if (cpp == null || cpp.compileCommandsPath == null || cpp.compileCommandsPath.isBlank()) {
+            return Collections.emptyList();
+        }
+        Path dbPath = Path.of(cpp.compileCommandsPath);
+        if (!Files.isRegularFile(dbPath)) {
+            out.issues.add(ParseIssue.warning("CPP.COMPILE_DB_MISSING",
+                    "compile_commands.json 不存在：" + dbPath + "，使用 fallback 编译参数", null));
+            return Collections.emptyList();
+        }
+        try {
+            String content = Files.readString(dbPath, StandardCharsets.UTF_8);
+            List<Map<String, Object>> entries =
+                    Json.fromJson(content, new TypeReference<List<Map<String, Object>>>() {});
+            Set<String> absPaths = new HashSet<>();
+            for (Map<String, Object> f : filesJson) {
+                absPaths.add(String.valueOf(f.get("absolutePath")));
+            }
+            List<Map<String, Object>> matched = new ArrayList<>();
+            for (Map<String, Object> e : entries) {
+                String file = String.valueOf(e.get("file"));
+                for (String abs : absPaths) {
+                    if (abs.equals(file) || abs.endsWith("/" + file) || file.endsWith(abs)) {
+                        matched.add(e);
+                        break;
+                    }
+                }
+            }
+            return matched;
+        } catch (Exception e) {
+            out.issues.add(ParseIssue.warning("CPP.COMPILE_DB_MISSING",
+                    "compile_commands.json 解析失败：" + e.getMessage() + "，使用 fallback 编译参数", null));
+            return Collections.emptyList();
+        }
     }
 
     @SuppressWarnings("unchecked")
@@ -140,6 +204,9 @@ public class ClangSubprocessClient implements LanguageParser {
         if (skipObj instanceof Number n) {
             skipped = n.intValue();
         }
+        // 跨文件去重：C++ 头文件声明与实现文件定义会产出同 ID 实体（ODR），保留首个（头文件声明）
+        Set<String> seenEntityIds = new HashSet<>();
+        Set<String> seenRelationIds = new HashSet<>();
         for (Object fObj : (List<?>) filesObj) {
             Map<String, Object> f = (Map<String, Object>) fObj;
             String path = String.valueOf(f.get("path"));
@@ -147,7 +214,7 @@ public class ClangSubprocessClient implements LanguageParser {
             List<Map<String, Object>> ents = (List<Map<String, Object>>) f.getOrDefault("entities", List.of());
             for (Map<String, Object> em : ents) {
                 Entity e = Json.MAPPER.convertValue(em, Entity.class);
-                if (e.id == null) {
+                if (e.id == null || !seenEntityIds.add(e.id)) {
                     continue;
                 }
                 out.entities.add(e);
@@ -159,7 +226,7 @@ public class ClangSubprocessClient implements LanguageParser {
             List<Map<String, Object>> rels = (List<Map<String, Object>>) f.getOrDefault("relations", List.of());
             for (Map<String, Object> rm : rels) {
                 Relation r = Json.MAPPER.convertValue(rm, Relation.class);
-                if (r.id != null) {
+                if (r.id != null && seenRelationIds.add(r.id)) {
                     out.relations.add(r);
                 }
             }

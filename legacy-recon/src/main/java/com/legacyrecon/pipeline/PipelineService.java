@@ -30,7 +30,7 @@ public class PipelineService {
     private final FactsStore facts;
     private final GraphStore graph;
     private final IncrementalAnalyzer analyzer;
-    private final LanguageParser parser;
+    private final Map<String, LanguageParser> parsersByLang;
     private final EnrichmentService enrichment;
     private final GeneratorService generator;
     private final ApplicationEventPublisher events;
@@ -41,12 +41,16 @@ public class PipelineService {
     private final Map<String, ExportArtifact> cachedGen = new ConcurrentHashMap<>();
 
     public PipelineService(FactsStore facts, GraphStore graph, IncrementalAnalyzer analyzer,
-                           LanguageParser parser, EnrichmentService enrichment,
+                           List<LanguageParser> parsers, EnrichmentService enrichment,
                            GeneratorService generator, ApplicationEventPublisher events) {
         this.facts = facts;
         this.graph = graph;
         this.analyzer = analyzer;
-        this.parser = parser;
+        Map<String, LanguageParser> byLang = new LinkedHashMap<>();
+        for (LanguageParser p : parsers) {
+            byLang.put(p.language(), p);
+        }
+        this.parsersByLang = byLang;
         this.enrichment = enrichment;
         this.generator = generator;
         this.events = events;
@@ -91,7 +95,11 @@ public class PipelineService {
             throw new IllegalArgumentException("项目不存在：" + projectId);
         }
         ProjectConfig config = Json.fromJson(project.configJson, ProjectConfig.class);
-        String lang = lang(config);
+        String lang = lang(project);
+        LanguageParser parser = parsersByLang.get(lang);
+        if (parser == null) {
+            throw new IllegalArgumentException("不支持的语言：" + lang + "（可用：" + parsersByLang.keySet() + "）");
+        }
 
         facts.insertRun(runId, projectId, trigger, Json.toJson(Map.of()),
                 "running");
@@ -196,8 +204,20 @@ public class PipelineService {
         return art;
     }
 
-    private String lang(ProjectConfig config) {
-        // MVP 为 Java 闭环（阶段 1）；C/C++（Clang 子进程）由 LanguageParser 路由扩展。
+    /** 语言路由：从项目 configJson 顶层读 language（导入时由 ProjectController 写入），默认 java。 */
+    @SuppressWarnings("unchecked")
+    private String lang(Project project) {
+        if (project.configJson != null) {
+            try {
+                Map<String, Object> raw = Json.fromJson(project.configJson, Map.class);
+                Object lang = raw.get("language");
+                if (lang != null && !String.valueOf(lang).isBlank()) {
+                    return String.valueOf(lang);
+                }
+            } catch (Exception ignored) {
+                // 解析失败按默认 java
+            }
+        }
         return "java";
     }
 
