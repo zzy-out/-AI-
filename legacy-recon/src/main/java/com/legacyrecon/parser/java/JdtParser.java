@@ -8,6 +8,7 @@ import com.legacyrecon.ucm.model.*;
 import org.eclipse.jdt.core.JavaCore;
 import org.eclipse.jdt.core.compiler.IProblem;
 import org.eclipse.jdt.core.dom.*;
+import org.springframework.stereotype.Component;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -26,6 +27,7 @@ import java.util.*;
  *   <li>Binding 失败时按文件降级为 DOM 解析，保证健壮性。</li>
  * </ul>
  */
+@Component
 public class JdtParser implements LanguageParser {
 
     private static final Set<String> PRIMITIVES = Set.of(
@@ -142,11 +144,22 @@ public class JdtParser implements LanguageParser {
 
         // 4) 基于 binding 的跨文件关系（INHERITS/IMPLEMENTS/OVERRIDES）
         List<Relation> extra = resolveCrossFile(index, projectIds, projectTypes);
+        // 去重：关系构造 helper 既入列表又返回值，调用处可能二次添加（同 ID 语义相同）
+        Set<String> seenRelationIds = new HashSet<>();
         for (FileUnit u : units) {
             u.classifyTypeRefs(projectTypes, projectIds);
             u.registerInto(out, projectTypes, projectIds);
+            for (Relation r : u.relations) {
+                if (r.id != null && seenRelationIds.add(r.id)) {
+                    out.relations.add(r);
+                }
+            }
         }
-        out.relations.addAll(extra);
+        for (Relation r : extra) {
+            if (r.id != null && seenRelationIds.add(r.id)) {
+                out.relations.add(r);
+            }
+        }
 
         // 5) 统计
         out.addStats("fileCount", units.size());

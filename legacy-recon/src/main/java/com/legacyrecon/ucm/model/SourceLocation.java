@@ -27,6 +27,17 @@ public class SourceLocation {
         return line >= startLine && line < endLine;
     }
 
+    /**
+     * 位置级包含判断（半开区间 [start, end)，按 (line, col) 元组比较）。
+     * 单行实体 startLine == endLine 时，仅比较行号的判断会把区间当成空集，
+     * 必须结合列号判断。
+     */
+    public boolean contains(int line, int col) {
+        boolean afterStart = line > startLine || (line == startLine && col >= startCol);
+        boolean beforeEnd = line < endLine || (line == endLine && col < endCol);
+        return afterStart && beforeEnd;
+    }
+
     @Override
     public String toString() {
         return file + "#L" + startLine + "-" + (endLine - 1);
