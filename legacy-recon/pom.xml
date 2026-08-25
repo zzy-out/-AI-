@@ -59,6 +59,12 @@
       <artifactId>spring-boot-starter-jdbc</artifactId>
     </dependency>
 
+    <!-- 生产监控：健康检查 / Info / 指标（management endpoints） -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-actuator</artifactId>
+    </dependency>
+
     <!-- 事实层 SQLite (ADR-003 / 3.2) -->
     <dependency>
       <groupId>org.xerial</groupId>
